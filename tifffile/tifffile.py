@@ -728,7 +728,7 @@ Open the fsspec ReferenceFileSystem as a zarr array:
 
 """
 
-__version__ = '2022.2.9'
+__version__ = '2022.3.16'
 
 __all__ = [
     'OmeXml',
