@@ -728,7 +728,7 @@ Open the fsspec ReferenceFileSystem as a zarr array:
 
 """
 
-__version__ = '2022.2.9'
+__version__ = '2022.3.16'
 
 __all__ = [
     'OmeXml',
@@ -4690,7 +4690,7 @@ class TiffFile:
                     elif keyframe is None:
                         raise RuntimeError('no keyframe')
                     else:
-                        ifd = TiffFrame(self, page.index, keyframe=keyframe)
+                        ifd = TiffFrame(self, page.index, keyframe=keyframe, page=page)
                     ifds.append(ifd)
                 # fix shape
                 shape = []
@@ -7780,6 +7780,7 @@ class TiffFrame:
         'subifds',
         'jpegtables',
         '_keyframe',
+        'page',
     )
 
     is_mdgel = False
@@ -7794,6 +7795,7 @@ class TiffFrame:
         keyframe=None,
         offsets=None,
         bytecounts=None,
+        page=None,
     ):
         """Initialize TiffFrame from file or values.
 
@@ -7808,6 +7810,10 @@ class TiffFrame:
         self.jpegtables = None
         self.dataoffsets = ()
         self.databytecounts = ()
+        self.page = None
+
+        if page is not None:
+            self.page = page
 
         if offsets is not None:
             # initialize "virtual frame" from offsets and bytecounts
@@ -7830,17 +7836,30 @@ class TiffFrame:
         else:
             tags = {256, 273, 279, 324, 325, 330, 347}
 
-        for code, tag in self._gettags(tags):
-            if code == 273 or code == 324:
-                self.dataoffsets = tag.value
-            elif code == 279 or code == 325:
-                self.databytecounts = tag.value
-            elif code == 330:
-                self.subifds = tag.value
-            elif code == 347:
-                self.jpegtables = tag.value
-            elif code == 256 and keyframe.imagewidth != tag.value:
-                raise RuntimeError('incompatible keyframe')
+        code_tags = self._gettags(tags)
+
+        if len(code_tags) > 0:
+            for code, tag in code_tags:
+                if code == 273 or code == 324:
+                    self.dataoffsets = tag.value
+                elif code == 279 or code == 325:
+                    self.databytecounts = tag.value
+                elif code == 330:
+                    self.subifds = tag.value
+                elif code == 347:
+                    self.jpegtables = tag.value
+                elif code == 256 and keyframe.imagewidth != tag.value:
+                    raise RuntimeError('incompatible keyframe')
+
+        elif self.page is not None:
+            if self._keyframe is None:
+                self._keyframe = keyframe
+            self.dataoffsets = self.page.dataoffsets
+            self.databytecounts = self.page.databytecounts
+            self.subifds = self.page.subifds
+            self.jpegtables = self.page.jpegtables
+            return
+
 
         if not self.dataoffsets:
             log_warning(f'{self!r} is missing required tags')
@@ -7858,7 +7877,10 @@ class TiffFrame:
         with lock:
             fh.seek(self.offset)
             try:
-                tagno = unpack(tiff.tagnoformat, fh.read(tiff.tagnosize))[0]
+                buffer = fh.read(tiff.tagnosize)
+                if buffer == b'':
+                    return []
+                tagno = unpack(tiff.tagnoformat, buffer)[0]
                 if tagno > 4096:
                     raise TiffFileError(f'suspicious number of tags {tagno}')
             except Exception as exc:
